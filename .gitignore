@@ -5,4 +5,4 @@
 myELF
 
 # Dev container
-.devcontainer/
+.devcontainer/devcontainer.json

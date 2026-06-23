@@ -1,5 +1,13 @@
 {
   "name": "ESPL Container BY Marae Bshoty",
   "image": "ghcr.io/mr3ee/devcontainer:latest",
+  "features": {
+    // Installs the official Claude Code CLI
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
+  },
+  "mounts": [
+    // Persists your Claude Code authentication across container rebuilds
+    "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind"
+  ],
   "remoteUser": "vscode"
 }
