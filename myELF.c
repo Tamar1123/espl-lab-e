@@ -10,6 +10,7 @@
 char debug_mode = 0;
 
 int fileCount = 0;
+int terminate = 0;
 
 
 char file_name1[128] = "";
@@ -55,10 +56,12 @@ int main(int argc, char* argv[]) {
     char choice;
 
     while (1) {
+        if (terminate)
+            return 0;
 
-        if (debug_mode == 1) {
+        if (debug_mode == 1) 
             printf("\n\nfile_mane1: %s\nfile_name2: %s\n", file_name1, file_name2);
-        }
+        
 
         printf("\nChoose action:\nToggle <D>ebug Mode\nExamine ELF <F>ile\nPrint Section <N>ames\n");
         printf("Print <S>ymbols\nPrint <R>elocations\n<C>heck Files for Merge\n<M>erge ELF Files\n<Q>uit\n");
@@ -171,14 +174,116 @@ void examine_elf_file() {
     printf("%-35s%u (bytes)\n",       "Size of program headers:",   header->e_phentsize);
 }
 
+//part 1
 void print_section_names() {
-    //TODO
-    printf("not inplemented yet");
+    if (fileCount == 0) {
+        printf("Error: No files are currently mapped.\n");
+        return;
+    }
+
+    for (int f = 0; f < fileCount; f++) {
+        void *current_addr = (f == 0) ? addr1 : addr2;
+        char *current_name = (f == 0) ? file_name1 : file_name2;
+
+        if (!current_addr) continue;
+
+        Elf32_Ehdr *header = (Elf32_Ehdr *)current_addr;
+        Elf32_Shdr *sec_headers = (Elf32_Shdr *)((char *)current_addr + header->e_shoff);
+        char *sh_str_table = (char *)current_addr + sec_headers[header->e_shstrndx].sh_offset;
+
+        if (debug_mode) {
+            fprintf(stderr, "[DEBUG] shstrndx = %u, shstrtab offset = 0x%x\n",
+                    header->e_shstrndx, sec_headers[header->e_shstrndx].sh_offset);
+        }
+
+        printf("File %s sections:\n", current_name);
+        printf("[index] section_name         section_address section_offset section_size section_type\n");
+
+        for (int i = 0; i < header->e_shnum; i++) {
+            Elf32_Shdr *shdr = &sec_headers[i];
+            char *sec_name = sh_str_table + shdr->sh_name;
+
+            if (debug_mode) {
+                fprintf(stderr, "[DEBUG] section[%d] sh_name offset = %u, name = '%s'\n",
+                        i, shdr->sh_name, sec_name);
+            }
+
+            printf("[%2d] %-20s 0x%08x     0x%06x     %6u       %u\n",
+                   i, sec_name, shdr->sh_addr, shdr->sh_offset,
+                   shdr->sh_size, shdr->sh_type);
+        }
+        printf("\n");
+    }
 }
 
-void print_symbols(){
-    //TODO
-    printf("not inplemented yet");
+//part 2a
+void print_symbols() {
+    if (fileCount == 0) {
+        printf("Error: No files are currently mapped.\n");
+        return;
+    }
+
+    for (int f = 0; f < fileCount; f++) {
+        void *current_addr = (f == 0) ? addr1 : addr2;
+        char *current_name = (f == 0) ? file_name1 : file_name2;
+
+        if (!current_addr) continue;
+
+        Elf32_Ehdr *header   = (Elf32_Ehdr *)current_addr;
+        Elf32_Shdr *sec_hdrs = (Elf32_Shdr *)((char *)current_addr + header->e_shoff);
+        char *sh_str_table   = (char *)current_addr + sec_hdrs[header->e_shstrndx].sh_offset;
+
+        Elf32_Sym *sym_table = NULL;
+        char      *str_table = NULL;
+        int        sym_count = 0;
+
+        for (int i = 0; i < header->e_shnum; i++) {
+            if (sec_hdrs[i].sh_type == SHT_SYMTAB) {
+                sym_table = (Elf32_Sym *)((char *)current_addr + sec_hdrs[i].sh_offset);
+                sym_count = sec_hdrs[i].sh_size / sizeof(Elf32_Sym);
+                str_table = (char *)current_addr + sec_hdrs[sec_hdrs[i].sh_link].sh_offset;
+
+                if (debug_mode) {
+                    fprintf(stderr, "[DEBUG] Symbol table: section index=%d, size=%u bytes, "
+                            "num_symbols=%d, strtab_link=%u\n",
+                            i, sec_hdrs[i].sh_size, sym_count, sec_hdrs[i].sh_link);
+                }
+                break;
+            }
+        }
+
+        if (!sym_table) {
+            printf("Error: No symbol table found in %s\n", current_name);
+            continue;
+        }
+
+        printf("File %s symbols:\n", current_name);
+        printf("[index] value      section_index section_name         symbol_name\n");
+
+        for (int i = 0; i < sym_count; i++) {
+            Elf32_Sym *sym     = &sym_table[i];
+            char      *sym_name = str_table + sym->st_name;
+            char      *sec_name;
+            char       sec_name_buf[32];
+
+            if (sym->st_shndx == SHN_UNDEF) {
+                sec_name = "UNDEF";
+            } else if (sym->st_shndx == SHN_ABS) {
+                sec_name = "ABS";
+            } else if (sym->st_shndx == SHN_COMMON) {
+                sec_name = "COMMON";
+            } else if (sym->st_shndx < header->e_shnum) {
+                sec_name = sh_str_table + sec_hdrs[sym->st_shndx].sh_name;
+            } else {
+                snprintf(sec_name_buf, sizeof(sec_name_buf), "RESERVED(%u)", sym->st_shndx);
+                sec_name = sec_name_buf;
+            }
+
+            printf("[%2d]   0x%08x %5u         %-20s %s\n",
+                   i, sym->st_value, sym->st_shndx, sec_name, sym_name);
+        }
+        printf("\n");
+    }
 }
 
 //part 2b
@@ -293,15 +398,12 @@ void check_file_for_merge() {
         }
     }
 
-    int error_found = 0;
-
     for (int current = 0; current < 2; current++) {
         int other = 1 - current;
-        void *curr_addr = (current == 0) ? addr1 : addr2;
 
         for (int i = 1; i < sym_counts[current]; i++) {
             Elf32_Sym *sym1 = &sym_tables[current][i];
-            char *sym_name = str_tables[current][sym1->st_name];
+            char *sym_name = &str_tables[current][sym1->st_name];
 
             if (strlen(sym_name) == 0) continue;
 
@@ -317,14 +419,12 @@ void check_file_for_merge() {
                 if (!sym2 || sym2->st_shndx == SHN_UNDEF) {
                     if (current == 0) {
                         printf("Symbol %s undefined\n", sym_name);
-                        error_found = 1;
                     }
                 }
             } 
             else if (sym1->st_shndx != SHN_UNDEF && sym2 && sym2->st_shndx != SHN_UNDEF) {
                 if (current == 0) {
                     printf("Symbol %s multiply defined\n", sym_name);
-                    error_found = 1;
                 }
             }
         }
@@ -467,5 +567,5 @@ void quit() {
     if (addr2 && length2 > 0) munmap(addr2, length2);
     if (fd1 >= 0) close(fd1);
     if (fd2 >= 0) close(fd2);
-    _exit(0);
+    terminate = 1;
 }
